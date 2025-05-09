@@ -1,33 +1,61 @@
+from abc import ABC, abstractmethod
+
+from typing import Optional, Any
+
 import requests
-from typing import Any, Optional
-from api.base_client import BaseApiClient
+
+from src.library_catalog.core.base_api import BaseApiClient
+
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 
-class OpenLibraryClient(BaseApiClient):
-    BASE_URL = "https://openlibrary.org"
+class AbstractOpenLibraryRepository(ABC):
+    @abstractmethod
+    def _get_first_doc_by_title(self, title: str) -> Optional[dict]:
+        pass
 
+    @abstractmethod
+    def get_cover_id_by_title(self, title: str) -> Optional[str]:
+        pass
+
+    @abstractmethod
+    def get_description_by_title(self, title: str) -> Optional[str]:
+        pass
+
+    @abstractmethod
+    def get_rating_by_title(self, title: str) -> Optional[float]:
+        pass
+
+
+class OpenLibraryRepository(BaseApiClient, AbstractOpenLibraryRepository):
+    BASE_URL = os.getenv("OPENLIBRARY_API_URL")
+
+    @retry(
+        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10)
+    )
     def _make_request(self, method: str, endpoint: str, **kwargs) -> Optional[Any]:
         try:
             response = requests.request(
-                method,
-                f"{self.BASE_URL}{endpoint}",
-                **kwargs,
-                timeout=5
+                method, f"{self.BASE_URL}{endpoint}", **kwargs, timeout=5
             )
             return self._handle_response(response)
         except requests.RequestException as e:
             print(f"Request faild: {e}")
             return None
 
-
-    def _handle_response(self, response: requests.Response) -> Optional[Any]:
-        if response.status_code == 200:
-            return response.json()
-        return None
+    def _handle_response(self, response: requests.Response) -> Any:
+        response.raise_for_status()
+        return response.json()
 
     def _get_first_doc_by_title(self, title: str) -> Optional[dict]:
         data = self._make_request("GET", "/search.json", params={"title": title})
-        return data.get("docs", [{}])[0] if data else None
+        docs = data.get("docs") if data else None
+        return docs[0] if docs else None
 
     def get_cover_id_by_title(self, title: str) -> Optional[str]:
         doc = self._get_first_doc_by_title(title)
